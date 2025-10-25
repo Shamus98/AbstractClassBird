@@ -173,252 +173,331 @@ public abstract class FastAbstractWrapper
     }
 
 }
-public class ChirpEvent : FastAbstractEvent
+
+
+
+// Упрощенный класс для одномерного случая
+public class Vector1D
 {
-    public string chirperId;
-    public double chirpTime;
+    public double X { get; set; }
 
-    public ChirpEvent(string chirperId, double chirpTime)
+    public Vector1D(double x = 0)
     {
-        this.chirperId = chirperId;
-        this.chirpTime = chirpTime;
+        X = x;
     }
 
-    public override void runEvent(FastAbstractWrapper wrapper, double timeSpan)
-    {
-        var swarmWrapper = wrapper as SwarmWrapper;
-        if (swarmWrapper != null)
-        {
-            swarmWrapper.ProcessChirp(chirperId, chirpTime, timeSpan);
-        }
-    }
+    public static Vector1D operator +(Vector1D a, Vector1D b) => new Vector1D(a.X + b.X);
+    public static Vector1D operator -(Vector1D a, Vector1D b) => new Vector1D(a.X - b.X);
+    public static Vector1D operator *(Vector1D a, double scalar) => new Vector1D(a.X * scalar);
 
-    public override string ToString()
-    {
-        return $"ChirpEvent from {chirperId} at {chirpTime}";
-    }
+    public double Length => Math.Abs(X);
+
+    public override string ToString() => $"{X:F2}";
 }
 
-// Класс скворца
+// Класс скворца для одномерного случая
 public class Starling : FastAbstractObject
 {
-    public double position; // Положение на прямой
-    public double velocity; // Скорость
-    public double lastChirpTime; // Время последнего писка
-    public double nextChirpTime; // Время следующего писка
-    public Dictionary<string, (double time, double position)> receivedChirps; // Полученные писки
+    public string Name { get; set; }
+    public Vector1D Position { get; set; }
+    public Vector1D Velocity { get; set; }
+    public Vector1D Acceleration { get; set; }
+    public double Mass { get; set; } = 1.0;
 
-    // Параметры поведения
-    public double chirpInterval; // Интервал между писками
-    public double safeDistance; // Зона безопасности
-    public double communicationRange; // Дальность связи
-    public double maxSpeed; // Максимальная скорость
+    // Параметры для силы пружины
+    public double SpringConstant { get; set; } = 1.0;
+    public double TargetDistance { get; set; } = 2.0; // R_n^0
 
-    public Starling(double initialPosition, double initialVelocity = 0)
+    // Лидер роя (A_0)
+    public Starling Leader { get; set; }
+
+    // Траектория лидера X_k^0 - теперь одномерная
+    public Func<double, double> LeaderTrajectory { get; set; }
+
+    public Starling(string name, double initialPosition)
     {
-        position = initialPosition;
-        velocity = initialVelocity;
-        lastChirpTime = 0;
-        nextChirpTime = 1.0; // Первый писк через 1 единицу времени
-        receivedChirps = new Dictionary<string, (double, double)>();
-
-        // Параметры по умолчанию
-        chirpInterval = 2.0;
-        safeDistance = 2.0;
-        communicationRange = 10.0;
-        maxSpeed = 1.0;
+        Name = name;
+        Position = new Vector1D(initialPosition);
+        Velocity = new Vector1D();
+        Acceleration = new Vector1D();
+        lastUpdated = 0;
     }
 
     public override (double, FastAbstractEvent) getNearestEvent()
     {
-        return (nextChirpTime, new ChirpEvent(uid, nextChirpTime));
+        // Следующее событие через фиксированный интервал времени
+        return (lastUpdated + 0.1, new StarlingUpdateEvent());
     }
 
-    public override void Update(double currentTime)
+    public override void Update(double timeSpan)
     {
-        lastUpdated = currentTime;
+        double deltaTime = timeSpan - lastUpdated;
 
-        // Обновление позиции
-        double deltaTime = currentTime - lastUpdated;
-        position += velocity * deltaTime;
-    }
-
-    // Обработка полученного писка
-    public void ReceiveChirp(string fromId, double chirpTime, double receiveTime, double senderPosition)
-    {
-        // Сохраняем информацию о писке
-        receivedChirps[fromId] = (receiveTime, senderPosition);
-
-        // Принимаем решение о маневре
-        DecideManeuver();
-    }
-
-    // Принятие решения о маневре
-    private void DecideManeuver()
-    {
-        double totalForce = 0;
-        int neighborCount = 0;
-
-        foreach (var chirp in receivedChirps.Values)
+        if (deltaTime > 0)
         {
-            double otherPosition = chirp.position;
-            double distance = Math.Abs(position - otherPosition);
+            // Обновляем позицию и скорость
+            Velocity = Velocity + Acceleration * deltaTime;
+            Position = Position + Velocity * deltaTime;
 
-            if (distance < communicationRange && distance > 0)
+            // Сбрасываем ускорение для следующего расчета
+            Acceleration = new Vector1D();
+        }
+
+        lastUpdated = timeSpan;
+    }
+
+    public void ApplyForce(Vector1D force)
+    {
+        Acceleration = Acceleration + force * (1.0 / Mass);
+    }
+
+    // Вычисляем силу пружины F = -K(R_n^0 - R_n) для одномерного случая
+    public void CalculateSpringForce()
+    {
+        if (Leader != null && LeaderTrajectory != null)
+        {
+            // Получаем позицию лидера в текущее время
+            double leaderPosition = LeaderTrajectory(lastUpdated);
+
+            // Расстояние до лидера
+            double currentDistance = leaderPosition - Position.X;
+
+            // Разность между целевым и текущим расстоянием
+            double distanceDifference = TargetDistance - Math.Abs(currentDistance);
+
+            // Определяем направление силы
+            double forceDirection = Math.Sign(currentDistance);
+
+            if (Math.Abs(distanceDifference) > 1e-10 && Math.Abs(currentDistance) > 1e-10)
             {
-                // Сила отталкивания для избежания столкновений
-                if (distance < safeDistance)
-                {
-                    double repulsionForce = 1.0 / (distance * distance) - 1.0 / (safeDistance * safeDistance);
-                    if (otherPosition > position)
-                        repulsionForce = -repulsionForce; // Двигаемся влево
-                    else
-                        repulsionForce = repulsionForce; // Двигаемся вправо
+                // Сила пружины F = -K * (R_n^0 - |R_n|) * sign(R_n)
+                double springForce = SpringConstant * distanceDifference * forceDirection;
 
-                    totalForce += repulsionForce;
-                    neighborCount++;
-                }
+                ApplyForce(new Vector1D(springForce));
             }
         }
-
-        if (neighborCount > 0)
-        {
-            // Обновляем скорость на основе сил
-            double acceleration = totalForce / neighborCount;
-            velocity += acceleration * 0.1; // Малый шаг для плавности
-
-            // Ограничиваем скорость
-            velocity = Math.Max(-maxSpeed, Math.Min(maxSpeed, velocity));
-        }
-        else
-        {
-            // Если соседей нет, замедляемся
-            velocity *= 0.95;
-        }
-    }
-
-    // Подготовка к следующему писку
-    public void PrepareNextChirp(double currentTime)
-    {
-        lastChirpTime = currentTime;
-        nextChirpTime = currentTime + chirpInterval;
     }
 }
 
-// Обертка для управления роем
-public class SwarmWrapper : FastAbstractWrapper
+// Событие обновления состояния скворца
+public class StarlingUpdateEvent : FastAbstractEvent
 {
-    private Dictionary<string, Starling> starlings => objects.Values.OfType<Starling>().ToDictionary(s => s.uid);
-    private double speedOfSound = 1.0; // Скорость распространения писка
-
-    public void ProcessChirp(string chirperId, double chirpTime, double receiveTime)
+    public override void runEvent(FastAbstractWrapper wrapper, double timeSpan)
     {
-        var chirper = getObject(chirperId) as Starling;
-        if (chirper == null) return;
-
-        // Обновляем позицию чирпера на момент писка
-        chirper.Update(chirpTime);
-        double chirperPosition = chirper.position;
-
-        // Отправляем писк всем другим скворцам
-        foreach (var starling in starlings.Values)
+        var swarmWrapper = wrapper as StarlingSwarmWrapper;
+        if (swarmWrapper != null)
         {
-            if (starling.uid != chirperId)
+            foreach (var starling in swarmWrapper.GetStarlings())
             {
-                // Рассчитываем время получения с учетом расстояния
-                double distance = Math.Abs(starling.position - chirperPosition);
-                double timeToReceive = chirpTime + distance / speedOfSound;
-
-                if (timeToReceive <= receiveTime) // Писк уже должен был быть получен
+                if (starling.Leader != null) // Не применяем силу к лидеру
                 {
-                    starling.Update(timeToReceive);
-                    starling.ReceiveChirp(chirperId, chirpTime, timeToReceive, chirperPosition);
+                    starling.CalculateSpringForce();
                 }
             }
         }
-
-        // Подготавливаем следующий писк
-        chirper.PrepareNextChirp(receiveTime);
     }
+}
 
-    // Добавление скворца в рой
+// Обертка для роя скворцов
+public class StarlingSwarmWrapper : FastAbstractWrapper
+{
+    private Dictionary<string, Starling> starlings = new Dictionary<string, Starling>();
+
     public void AddStarling(Starling starling)
     {
         addObject(starling);
+        starlings.Add(starling.uid, starling);
     }
 
-    // Получение текущего состояния роя
-    public List<(string id, double position, double velocity)> GetSwarmState()
+    public List<Starling> GetStarlings()
     {
-        return starlings.Values.Select(s => (s.uid, s.position, s.velocity)).ToList();
+        return starlings.Values.ToList();
     }
 
-    // Проверка безопасности дистанций
-    public List<(string id1, string id2, double distance)> GetViolatedDistances()
+    public Starling GetStarling(string uid)
     {
-        var violations = new List<(string, string, double)>();
-        var starlingList = starlings.Values.ToList();
+        return starlings.ContainsKey(uid) ? starlings[uid] : null;
+    }
 
-        for (int i = 0; i < starlingList.Count; i++)
+    public Starling GetLeader()
+    {
+        return starlings.Values.FirstOrDefault(s => s.Leader == null);
+    }
+
+    // Загрузка скворцов из файла (теперь только X координата)
+    public void LoadStarlingsFromFile(string filename)
+    {
+        try
         {
-            for (int j = i + 1; j < starlingList.Count; j++)
+            var lines = File.ReadAllLines(filename);
+            foreach (var line in lines)
             {
-                double distance = Math.Abs(starlingList[i].position - starlingList[j].position);
-                if (distance < starlingList[i].safeDistance)
+                var parts = line.Split(',');
+                if (parts.Length >= 2)
                 {
-                    violations.Add((starlingList[i].uid, starlingList[j].uid, distance));
+                    string name = parts[0].Trim();
+                    double x = double.Parse(parts[1].Trim());
+
+                    var starling = new Starling(name, x);
+                    AddStarling(starling);
                 }
             }
+
+            Console.WriteLine($"Загружено {starlings.Count} скворцов из файла {filename}");
+        }
+        catch (Exception ex)
+        {
+            writeError($"Ошибка загрузки файла: {ex.Message}");
+        }
+    }
+
+    // Настройка лидера и его траектории (одномерная)
+    public void SetupLeader(string leaderName, Func<double, double> trajectory)
+    {
+        var leader = starlings.Values.FirstOrDefault(s => s.Name == leaderName);
+        if (leader != null)
+        {
+            // Лидер не имеет лидера самого себя
+            leader.Leader = null;
+            leader.LeaderTrajectory = trajectory;
+
+            // Все остальные скворцы следуют за этим лидером
+            foreach (var starling in starlings.Values.Where(s => s.Name != leaderName))
+            {
+                starling.Leader = leader;
+                starling.LeaderTrajectory = trajectory;
+            }
+
+            Console.WriteLine($"Лидер установлен: {leaderName}");
+        }
+        else
+        {
+            writeError($"Скворец с именем {leaderName} не найден!");
+        }
+    }
+
+    // Вывод текущего состояния роя
+    public void PrintSwarmState()
+    {
+        Console.WriteLine($"Время: {updatedTime:F2}");
+        var leader = GetLeader();
+
+        if (leader != null)
+        {
+            double leaderPos = leader.LeaderTrajectory != null ?
+                leader.LeaderTrajectory(updatedTime) : leader.Position.X;
+            Console.WriteLine($"Лидер {leader.Name}: Позиция {leaderPos:F2}");
         }
 
-        return violations;
+        foreach (var starling in GetStarlings().OrderBy(s => s.Name))
+        {
+            if (starling.Leader != null)
+            {
+                double distanceToLeader = Math.Abs(starling.Leader.LeaderTrajectory(updatedTime) - starling.Position.X);
+                Console.WriteLine($"{starling.Name}: Позиция {starling.Position}, " +
+                                $"Скорость {starling.Velocity}, " +
+                                $"Расстояние до лидера: {distanceToLeader:F2}");
+            }
+        }
+        Console.WriteLine();
+    }
+
+    // Получить позиции всех скворцов для визуализации
+    public Dictionary<string, double> GetPositions()
+    {
+        var positions = new Dictionary<string, double>();
+        var leader = GetLeader();
+
+        if (leader != null && leader.LeaderTrajectory != null)
+        {
+            positions.Add(leader.Name, leader.LeaderTrajectory(updatedTime));
+        }
+
+        foreach (var starling in GetStarlings().Where(s => s.Leader != null))
+        {
+            positions.Add(starling.Name, starling.Position.X);
+        }
+
+        return positions;
     }
 }
 
 // Пример использования
-public class SwarmSimulation
+class Program
 {
-    public static void Main(String[] args)
+    static void Main(string[] args)
     {
-        var swarm = new SwarmWrapper();
-        var random = new Random();
+        // Создаем файл со скворцами (только X координаты)
+        CreateStarlingsFile("starlings.txt");
 
-        // Создаем начальный рой из 5 скворцов
-        for (int i = 0; i < 5; i++)
+        // Создаем и настраиваем рой
+        var swarm = new StarlingSwarmWrapper();
+        swarm.isDebug = false;
+
+        // Загружаем скворцов из файла
+        swarm.LoadStarlingsFromFile("starlings.txt");
+
+        // Задаем траекторию для лидера A_0: X_k^0 = 2*t - линейное движение
+        Func<double, double> leaderTrajectory = (time) => 2 * time;
+
+        // Альтернативные траектории для экспериментов:
+        // Func<double, double> leaderTrajectory = (time) => 5 * Math.Sin(time * 0.5); // Колебания
+        // Func<double, double> leaderTrajectory = (time) => time < 2 ? 0 : 3 * (time - 2); // Начинает движение после 2 сек
+
+        // Назначаем лидера
+        swarm.SetupLeader("A_0", leaderTrajectory);
+
+        // Настраиваем параметры пружины для всех скворцов
+        foreach (var starling in swarm.GetStarlings().Where(s => s.Leader != null))
         {
-            var starling = new Starling(
-                initialPosition: i * 3.0, // Начальные позиции с интервалом 3
-                initialVelocity: (random.NextDouble() - 0.5) * 0.1 // Случайные небольшие скорости
-            );
-            swarm.AddStarling(starling);
+            starling.SpringConstant = 2.0;    // K - жесткость пружины
+            starling.TargetDistance = 3.0;    // R_n^0 - целевое расстояние
         }
 
-        // Запускаем симуляцию на 100 шагов
-        for (int step = 0; step < 100; step++)
+        Console.WriteLine("Начальное состояние роя:");
+        swarm.PrintSwarmState();
+
+        // Запускаем симуляцию
+        int steps = 50;
+        for (int i = 0; i < steps; i++)
         {
-            swarm.Next(0.1); // Шаг симуляции 0.1 единицы времени
+            swarm.Next(0.1); // Шаг симуляции 0.1 секунды
 
-            // Выводим состояние каждые 10 шагов
-            if (step % 10 == 0)
+            if (i % 5 == 0) // Выводим состояние каждые 5 шагов
             {
-                Console.WriteLine($"Step {step}:");
-                var state = swarm.GetSwarmState();
-                foreach (var (id, position, velocity) in state)
-                {
-                    Console.WriteLine($"  Starling {id.Substring(0, 8)}: pos={position:F2}, vel={velocity:F2}");
-                }
-
-                var violations = swarm.GetViolatedDistances();
-                if (violations.Count > 0)
-                {
-                    Console.WriteLine("  Safety violations:");
-                    foreach (var (id1, id2, distance) in violations)
-                    {
-                        Console.WriteLine($"    {id1.Substring(0, 8)} - {id2.Substring(0, 8)}: {distance:F2}");
-                    }
-                }
-                Console.WriteLine();
+                swarm.PrintSwarmState();
             }
         }
+
+        Console.WriteLine("Симуляция завершена.");
+
+        // Выводим финальные позиции
+        Console.WriteLine("\nФинальные позиции:");
+        var finalPositions = swarm.GetPositions();
+        foreach (var pos in finalPositions.OrderBy(p => p.Value))
+        {
+            Console.WriteLine($"{pos.Key}: {pos.Value:F2}");
+        }
+    }
+
+    static void CreateStarlingsFile(string filename)
+    {
+        // Формат: имя, позиция_X
+        var starlings = new[]
+        {
+            "A_0, 0",      // Лидер
+            "A_1, -2",
+            "A_2, -4",
+            "A_3, 2",
+            "A_4, 4",
+            "A_5, -3",
+            "A_6, 3"
+        };
+
+        File.WriteAllLines(filename, starlings);
+        Console.WriteLine($"Создан файл {filename} с {starlings.Length} скворцами");
     }
 }
+
+// Класс скворца
+
